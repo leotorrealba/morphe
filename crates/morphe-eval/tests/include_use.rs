@@ -6,6 +6,9 @@
 //! `registerUse`/`usedlibs`, `FileContext.cc lookup_local_function` /
 //! `lookup_local_module`), and paths resolve against the including file's
 //! directory, then the library path (`parsersettings.cc find_valid_path`).
+//! `import()`/`surface()` written in a loaded file resolve next to that file
+//! (`ImportNode.cc` / `SurfaceNode.cc` `lookup_file` with the
+//! instantiation's location).
 //! Containment to the source tree / OPENSCADPATH, the hard errors for
 //! missing files and cycles, and the size/depth caps are morphe's own.
 
@@ -489,4 +492,183 @@ fn errors_in_used_functions_report_the_library_location() {
     let origin = err.origin.as_ref().expect("located in the library");
     assert_eq!(origin.file, lib.canonicalize().unwrap());
     assert_eq!(origin.line, 1);
+}
+
+// ------------------------------------------- import()/surface() in loaded files
+
+/// The paths of every `import()`/`surface()` leaf, in tree order.
+fn load_paths(node: &CsgNode, out: &mut Vec<PathBuf>) {
+    match node {
+        CsgNode::Import { path, .. } | CsgNode::Surface { path, .. } => out.push(path.clone()),
+        CsgNode::Group { children, .. } => children.iter().for_each(|c| load_paths(c, out)),
+        CsgNode::Transform { child, .. } => load_paths(child, out),
+        _ => {}
+    }
+}
+
+fn all_load_paths(node: &CsgNode) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    load_paths(node, &mut out);
+    out
+}
+
+const STL: &str = "solid x\nendsolid x\n";
+
+#[test]
+fn import_in_an_included_file_resolves_next_to_that_file() {
+    // Upstream `do_import` (src/core/ImportNode.cc) resolves against
+    // `inst->location().filePath().parent_path()`: the file the call is in.
+    let dir = temp_dir("import-in-include");
+    let mesh = write(&dir, "lib/mesh.stl", STL);
+    write(&dir, "mesh.stl", STL); // a same-named decoy next to main.scad
+    write(&dir, "lib/part.scad", "import(\"mesh.stl\");\n");
+    let main = write(&dir, "main.scad", "include <lib/part.scad>\n");
+    let (root, ev) = run_file(&main);
+    assert!(ev.errors().is_empty(), "{:?}", error_messages(&ev));
+    assert_eq!(all_load_paths(&root), [mesh.canonicalize().unwrap()]);
+}
+
+#[test]
+fn import_in_a_used_module_resolves_next_to_the_library() {
+    // The module is instantiated from main.scad, but the `import()` call is
+    // written in lib/part.scad, so that is the directory that counts.
+    let dir = temp_dir("import-in-use");
+    let mesh = write(&dir, "lib/mesh.stl", STL);
+    write(
+        &dir,
+        "lib/part.scad",
+        "module part() import(\"mesh.stl\");\n",
+    );
+    let main = write(&dir, "main.scad", "use <lib/part.scad>\npart();\n");
+    let (root, ev) = run_file(&main);
+    assert!(ev.errors().is_empty(), "{:?}", error_messages(&ev));
+    assert_eq!(all_load_paths(&root), [mesh.canonicalize().unwrap()]);
+}
+
+#[test]
+fn import_in_the_main_file_still_resolves_next_to_it() {
+    // Children passed into a library module are written in main.scad.
+    let dir = temp_dir("import-main-child");
+    let mesh = write(&dir, "mesh.stl", STL);
+    write(&dir, "lib/mesh.stl", STL);
+    write(&dir, "lib/wrap.scad", "module wrap() children();\n");
+    let main = write(
+        &dir,
+        "main.scad",
+        "use <lib/wrap.scad>\nwrap() import(\"mesh.stl\");\n",
+    );
+    let (root, ev) = run_file(&main);
+    assert!(ev.errors().is_empty(), "{:?}", error_messages(&ev));
+    assert_eq!(all_load_paths(&root), [mesh.canonicalize().unwrap()]);
+}
+
+#[test]
+fn missing_file_in_an_included_file_does_not_fall_back_to_the_main_dir() {
+    // Upstream `lookup_file` (src/io/fileutils.cc) has no document-root
+    // fallback: the path names the file next to the library, which the
+    // kernel then reports missing.
+    let dir = temp_dir("import-no-fallback");
+    write(&dir, "mesh.stl", STL);
+    write(&dir, "lib/part.scad", "import(\"mesh.stl\");\n");
+    let main = write(&dir, "main.scad", "include <lib/part.scad>\n");
+    let (root, ev) = run_file(&main);
+    assert!(ev.errors().is_empty(), "{:?}", error_messages(&ev));
+    let expected = dir.join("lib").canonicalize().unwrap().join("mesh.stl");
+    assert_eq!(all_load_paths(&root), [expected]);
+}
+
+#[test]
+fn surface_in_an_included_file_resolves_next_to_that_file() {
+    let dir = temp_dir("surface-in-include");
+    let dat = write(&dir, "lib/height.dat", "1 2\n3 4\n");
+    write(&dir, "lib/part.scad", "surface(\"height.dat\");\n");
+    write(
+        &dir,
+        "lib/terrain.scad",
+        "module terrain() surface(file = \"height.dat\", center = true);\n",
+    );
+    let main = write(
+        &dir,
+        "main.scad",
+        "include <lib/part.scad>\nuse <lib/terrain.scad>\nterrain();\n",
+    );
+    let (root, ev) = run_file(&main);
+    assert!(ev.errors().is_empty(), "{:?}", error_messages(&ev));
+    let dat = dat.canonicalize().unwrap();
+    assert_eq!(all_load_paths(&root), [dat.clone(), dat]);
+}
+
+#[test]
+fn a_library_file_may_load_data_inside_its_library_dir() {
+    let libs = temp_dir("import-lib-dir");
+    let mesh = write(&libs, "parts/mesh.stl", STL);
+    write(
+        &libs,
+        "parts/bolt.scad",
+        "module bolt() import(\"mesh.stl\");\n",
+    );
+    let project = temp_dir("import-lib-dir-proj");
+    let main = project.join("main.scad");
+    let src = "use <parts/bolt.scad>\nbolt();\n";
+    let (root, ev) = run(src, Some(&main), vec![libs.clone()]);
+    assert!(ev.errors().is_empty(), "{:?}", error_messages(&ev));
+    assert_eq!(all_load_paths(&root), [mesh.canonicalize().unwrap()]);
+
+    // Also when the main buffer is unsaved.
+    let (root, ev) = run(src, None, vec![libs]);
+    assert!(ev.errors().is_empty(), "{:?}", error_messages(&ev));
+    assert_eq!(all_load_paths(&root), [mesh.canonicalize().unwrap()]);
+}
+
+#[test]
+fn import_in_an_included_file_cannot_escape_the_source_tree() {
+    let root_dir = temp_dir("import-escape");
+    let project = root_dir.join("proj");
+    let secret = write(&root_dir, "secret.stl", STL);
+    let main = project.join("main.scad");
+
+    let attempts = [
+        // `..` is refused outright, as in the main file.
+        ("import(\"../secret.stl\");\n", "'..'"),
+        ("surface(\"../../secret.stl\");\n", "'..'"),
+        // An absolute path outside the source dir and OPENSCADPATH.
+        (
+            &*format!("import(\"{}\");\n", secret.display()),
+            "resolves outside",
+        ),
+    ];
+    for (lib_src, expected) in attempts {
+        write(&project, "lib/part.scad", lib_src);
+        let (root, ev) = run("include <lib/part.scad>\n", Some(&main), Vec::new());
+        let err = single_error(&ev);
+        assert!(err.message.contains(expected), "{lib_src}: {}", err.message);
+        let origin = err.origin.as_ref().expect("located in the included file");
+        assert_eq!(origin.file.file_name().unwrap(), "part.scad");
+        assert!(all_load_paths(&root)
+            .iter()
+            .all(|p| p.as_os_str().is_empty()));
+    }
+
+    // A library-dir file cannot reach outside its library dir either.
+    let libs = root_dir.join("libs");
+    write(
+        &libs,
+        "bad.scad",
+        &format!("module bad() import(\"{}\");\n", secret.display()),
+    );
+    let (_, ev) = run("use <bad.scad>\nbad();\n", Some(&main), vec![libs]);
+    assert!(single_error(&ev).message.contains("resolves outside"));
+}
+
+#[cfg(unix)]
+#[test]
+fn symlink_in_an_included_file_cannot_escape_the_source_tree() {
+    let root_dir = temp_dir("import-symlink-escape");
+    let project = root_dir.join("proj");
+    let secret = write(&root_dir, "secret.stl", STL);
+    write(&project, "lib/part.scad", "import(\"link.stl\");\n");
+    std::os::unix::fs::symlink(&secret, project.join("lib/link.stl")).unwrap();
+    let main = write(&project, "main.scad", "include <lib/part.scad>\n");
+    let (_, ev) = run_file(&main);
+    assert!(single_error(&ev).message.contains("resolves outside"));
 }

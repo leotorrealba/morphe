@@ -46,8 +46,6 @@ accept or reject; the code stays visible and editable at all times.
   `OPENSCADPATH` (not OpenSCAD's user or built-in library folders). An unsaved
   buffer can only include from `OPENSCADPATH`. A missing file or an include
   cycle is an error (OpenSCAD warns and skips it).
-- `import()` and `surface()` inside an included or used file still resolve
-  relative paths against the main file's directory.
 - In the desktop editor, an error inside an included or used file is marked on
   the `include`/`use` line of the open file (the CLI prints the library's own
   `file:line:col`).
@@ -56,7 +54,8 @@ accept or reject; the code stays visible and editable at all times.
 - `import()` reads STL only (no 3MF/OFF/DXF/SVG). `text()` builds geometry
   only (no `textmetrics()`).
 - `import()` and `surface()` only load files inside the directory of the open
-  `.scad` file, and `include`/`use` only those under it or `OPENSCADPATH`.
+  `.scad` file (or, when called from a library file, under `OPENSCADPATH`),
+  and `include`/`use` only those under it or `OPENSCADPATH`.
   This is a deliberate divergence from OpenSCAD: the compile result is visible
   to the AI agent.
 - The API key is stored in the OS credential store (macOS Keychain, Windows
