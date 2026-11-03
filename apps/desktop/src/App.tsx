@@ -72,7 +72,7 @@ export default function App() {
   const dirty = source !== savedSource;
   const [toast, setToast] = useState<ToastMsg | null>(null);
   const { theme, toggle } = useTheme();
-  const { mesh, errors, stats, compiling, lastMs } = useDebouncedRecompile(source);
+  const { mesh, errors, stats, compiling, lastMs, stale } = useDebouncedRecompile(source);
 
   const doExport = useCallback(async () => {
     const res = await runExport(source, REAL_EXPORT_DEPS);
@@ -202,6 +202,7 @@ export default function App() {
         compiling={compiling}
         lastMs={lastMs}
         errorCount={errors.length}
+        stale={stale}
       />
       <Toast toast={toast} onDismiss={() => setToast(null)} />
     </main>

@@ -7,6 +7,12 @@
 // call. An in-flight compile that is superseded by a newer edit is dropped via
 // the `cancelled` flag (stale-result guard).
 //
+// When a compile fails (parse/eval/resolver errors, or the IPC call itself),
+// the LAST GOOD mesh and stats are kept and `stale` is set, so a typo
+// mid-edit doesn't blank the viewport; the errors are still reported. A
+// compile that succeeds with no 3D result (a 2D-only or empty program) clears
+// the mesh as before.
+//
 // Factored as a standalone hook so the single-call behavior can be asserted
 // with fake timers (see useDebouncedRecompile.test.tsx) without mounting the
 // full editor/viewport.
@@ -21,6 +27,9 @@ export interface RecompileState {
   compiling: boolean;
   /** Wall-clock duration of the most recent compile (ms), or null before first. */
   lastMs: number | null;
+  /** True when `mesh`/`stats` are from an earlier successful compile because
+   * the latest one failed. */
+  stale: boolean;
 }
 
 const INITIAL: RecompileState = {
@@ -29,7 +38,25 @@ const INITIAL: RecompileState = {
   stats: null,
   compiling: false,
   lastMs: null,
+  stale: false,
 };
+
+/** A failed compile: report `errors` but keep the previous mesh and stats
+ * (marked stale when there was one). */
+function keepLastGood(
+  prev: RecompileState,
+  errors: CompileError[],
+  lastMs: number,
+): RecompileState {
+  return {
+    mesh: prev.mesh,
+    stats: prev.stats,
+    errors,
+    compiling: false,
+    lastMs,
+    stale: prev.mesh !== null,
+  };
+}
 
 /**
  * Debounce window in milliseconds. Exported so tests can pass the same value
@@ -52,29 +79,28 @@ export function useDebouncedRecompile(source: string, ms = DEFAULT_DEBOUNCE_MS):
       try {
         const res = await compileSource(source);
         if (cancelled) return;
-        setState({
-          mesh: res.mesh,
-          errors: res.meta.errors,
-          stats: res.meta.stats,
-          compiling: false,
-          lastMs: Math.round(performance.now() - t0),
-        });
+        const lastMs = Math.round(performance.now() - t0);
+        if (res.meta.errors.length > 0) {
+          setState((s) => keepLastGood(s, res.meta.errors, lastMs));
+        } else {
+          setState({
+            mesh: res.mesh,
+            errors: [],
+            stats: res.meta.stats,
+            compiling: false,
+            lastMs,
+            stale: false,
+          });
+        }
       } catch (err) {
         if (cancelled) return;
-        setState({
-          mesh: null,
-          errors: [
-            {
-              line: 0,
-              col: 0,
-              message: err instanceof Error ? err.message : String(err),
-              kind: "general",
-            },
-          ],
-          stats: null,
-          compiling: false,
-          lastMs: Math.round(performance.now() - t0),
-        });
+        const error: CompileError = {
+          line: 0,
+          col: 0,
+          message: err instanceof Error ? err.message : String(err),
+          kind: "general",
+        };
+        setState((s) => keepLastGood(s, [error], Math.round(performance.now() - t0)));
       }
     }, ms);
     return () => {
