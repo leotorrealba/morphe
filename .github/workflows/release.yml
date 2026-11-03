@@ -241,6 +241,21 @@ jobs:
           GH_REPO: ${{ github.repository }}
           TAG: ${{ needs.preflight.outputs.tag }}
         run: |
+          # Re-running a release replaces an earlier DRAFT for the same tag
+          # (drafts are unpublished, so nothing public is lost). A published
+          # release is never touched: the run fails instead.
+          existing="$(gh api "repos/$GH_REPO/releases" --paginate \
+            --jq '.[] | select(.tag_name == $ENV.TAG) | "\(.id) \(.draft)"')"
+          while read -r id draft; do
+            [ -z "$id" ] && continue
+            if [ "$draft" = "true" ]; then
+              echo "replacing earlier draft release $id for $TAG"
+              gh api -X DELETE "repos/$GH_REPO/releases/$id"
+            else
+              echo "::error::release $TAG is already published; bump the version instead"
+              exit 1
+            fi
+          done <<< "$existing"
           gh release create "$TAG" dist/* \
             --draft \
             --title "morphe $TAG" \
