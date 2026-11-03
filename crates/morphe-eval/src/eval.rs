@@ -267,14 +267,13 @@ impl EvalError {
     #[must_use]
     pub fn located_message(&self) -> String {
         match &self.origin {
-            Some(origin) => {
-                let name = origin
-                    .file
-                    .file_name()
-                    .map(|n| n.to_string_lossy().into_owned())
-                    .unwrap_or_else(|| "<included file>".to_string());
-                format!("{name}:{}:{}: {}", origin.line, origin.col, self.message)
-            }
+            Some(origin) => format!(
+                "{}:{}:{}: {}",
+                origin_name(origin),
+                origin.line,
+                origin.col,
+                self.message
+            ),
             None => self.message.clone(),
         }
     }
@@ -295,6 +294,76 @@ impl EvalError {
             span,
             kind: EvalErrorKind::Unsupported { construct, hint },
             origin: None,
+        }
+    }
+}
+
+/// File name shown for an included/used file in diagnostics: the name only,
+/// never the full path, so absolute paths don't leak into the AI channel.
+fn origin_name(origin: &ErrorOrigin) -> String {
+    origin
+        .file
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "<included file>".to_string())
+}
+
+/// A non-fatal evaluation warning together with where it was raised
+/// (upstream passes the instantiation's or expression's `Location` to most
+/// `LOG(message_group::Warning, ...)` calls and prints it as `in file ...,
+/// line ...`). Here the location is the innermost expression or statement
+/// being evaluated when the warning was raised. Obtained from
+/// [`Evaluator::eval_warnings`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EvalWarning {
+    pub message: String,
+    /// Byte span in the MAIN source, like [`EvalError::span`]: for a warning
+    /// inside an included or used file, the span of the main file's
+    /// `include`/`use` that brought it in. `None` when the warning was
+    /// raised outside any expression or statement.
+    pub span: Option<Span>,
+    /// The file and position the warning actually occurred at, when that is
+    /// an included or used file (`None` for the main source).
+    pub origin: Option<ErrorOrigin>,
+}
+
+impl EvalWarning {
+    /// 1-based `(line, col)` of the warning: inside [`EvalWarning::origin`]'s
+    /// file when set, otherwise in `main_source`; `None` when unlocated.
+    #[must_use]
+    pub fn line_col(&self, main_source: &str) -> Option<(usize, usize)> {
+        match &self.origin {
+            Some(origin) => Some((origin.line, origin.col)),
+            None => self
+                .span
+                .map(|span| morphe_lang::lexer::line_col(main_source, span.start)),
+        }
+    }
+
+    /// The warning's location as `file:line:col`: the included/used file's
+    /// NAME (never its full path) when [`EvalWarning::origin`] is set,
+    /// otherwise `main_name` — or just `line:col` when `main_name` is `None`
+    /// (a consumer that already knows it is showing the main buffer).
+    /// `None` when the warning has no location.
+    #[must_use]
+    pub fn location(&self, main_source: &str, main_name: Option<&str>) -> Option<String> {
+        let (line, col) = self.line_col(main_source)?;
+        Some(match (&self.origin, main_name) {
+            (Some(origin), _) => format!("{}:{line}:{col}", origin_name(origin)),
+            (None, Some(name)) => format!("{name}:{line}:{col}"),
+            (None, None) => format!("{line}:{col}"),
+        })
+    }
+
+    /// The message prefixed with its [location](EvalWarning::location), e.g.
+    /// `lib.scad:3:5: Ignoring unknown variable 'x'` — or the bare message
+    /// when the warning has no location. The counterpart of
+    /// [`EvalError::located_message`] for string-only consumers.
+    #[must_use]
+    pub fn located_message(&self, main_source: &str, main_name: Option<&str>) -> String {
+        match self.location(main_source, main_name) {
+            Some(location) => format!("{location}: {}", self.message),
+            None => self.message.clone(),
         }
     }
 }
@@ -599,9 +668,34 @@ impl Evaluator {
         self.scope.lookup(name)
     }
 
-    /// Warnings recorded so far, in order.
+    /// Warnings recorded so far, in order (messages only; see
+    /// [`Evaluator::eval_warnings`] for their locations).
     pub fn warnings(&self) -> &[String] {
         self.scope.warnings()
+    }
+
+    /// Warnings recorded so far, in order, with where each was raised. A
+    /// warning inside an included or used file carries that file's position
+    /// in [`EvalWarning::origin`] and the entry `include`/`use` statement's
+    /// span, exactly like [`EvalError`]s.
+    #[must_use]
+    pub fn eval_warnings(&self) -> Vec<EvalWarning> {
+        self.scope
+            .warnings()
+            .iter()
+            .zip(self.scope.warning_spans())
+            .map(|(message, &span)| {
+                let (origin, span) = match span.and_then(|s| self.source_map.origin(s)) {
+                    Some((origin, entry)) => (Some(origin), Some(entry)),
+                    None => (None, span),
+                };
+                EvalWarning {
+                    message: message.clone(),
+                    span,
+                    origin,
+                }
+            })
+            .collect()
     }
 
     /// Hard errors recorded so far, in order.
@@ -736,24 +830,34 @@ impl Evaluator {
             }
         }
 
-        let assignments: Vec<(&str, &Expr)> = flat
+        let assignments: Vec<(&str, (&Expr, Span))> = flat
             .iter()
             .filter_map(|stmt| match &stmt.kind {
-                StmtKind::Assign { name, value } => Some((name.as_str(), value)),
+                StmtKind::Assign { name, value } => Some((name.as_str(), (value, stmt.span))),
                 _ => None,
             })
             .collect();
+        // `merge_assignments` reports one warning per repeated assignment,
+        // in source order; pair each with that assignment's span.
+        let mut seen = HashSet::new();
+        let repeat_spans: Vec<Span> = assignments
+            .iter()
+            .filter(|(name, _)| !seen.insert(*name))
+            .map(|(_, (_, span))| *span)
+            .collect();
         let (merged, warnings) = merge_assignments(assignments);
-        for warning in warnings {
-            self.scope.warn(warning);
+        for (warning, span) in warnings.into_iter().zip(repeat_spans) {
+            self.scope.warn_at(span, warning);
         }
-        for (name, expr) in merged {
+        for (name, (expr, span)) in merged {
             if kind == BodyKind::ModuleBody
                 && is_literal(expr)
                 && self.scope.lookup_local(name).is_some()
             {
-                self.scope
-                    .warn(format!("Parameter '{name}' is overwritten with a literal"));
+                self.scope.warn_at(
+                    span,
+                    format!("Parameter '{name}' is overwritten with a literal"),
+                );
             }
             let value = self.eval_nested(expr);
             self.scope.set(name, value);
@@ -796,7 +900,9 @@ impl Evaluator {
             return None;
         }
         self.inst_depth += 1;
+        let outer_span = self.scope.set_warn_span(Some(stmt.span));
         let node = self.eval_instantiation_kind(stmt);
+        self.scope.set_warn_span(outer_span);
         self.inst_depth -= 1;
         node
     }
@@ -1764,7 +1870,11 @@ impl Evaluator {
             return Value::Undef(None);
         }
         self.expr_depth += 1;
+        // Warnings raised while evaluating this expression (and not inside
+        // a nested one) are attributed to it.
+        let outer_span = self.scope.set_warn_span(Some(expr.span));
         let value = self.eval_expr_kind(expr);
+        self.scope.set_warn_span(outer_span);
         self.expr_depth -= 1;
         value
     }

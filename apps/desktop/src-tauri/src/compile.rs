@@ -68,7 +68,10 @@ pub struct CompileResult {
     pub stats: Option<GeometryStats>,
     /// Hard errors (parse, eval, resolver). Empty on success.
     pub errors: Vec<CompileError>,
-    /// Non-fatal warnings from eval + the resolver.
+    /// Non-fatal warnings from eval + the resolver. Eval warnings are
+    /// prefixed with their location — `line:col: ` in the open buffer,
+    /// `lib.scad:line:col: ` in an included or used file (see
+    /// [`located_warnings`]); resolver warnings have none.
     pub warnings: Vec<String>,
 }
 
@@ -184,10 +187,10 @@ pub(crate) fn resolve_source(source: &str, source_path: Option<&Path>) -> Resolv
         return Resolved {
             geometry: None,
             errors,
-            warnings: evaluator.warnings().to_vec(),
+            warnings: located_warnings(&evaluator, source),
         };
     }
-    let mut warnings = evaluator.warnings().to_vec();
+    let mut warnings = located_warnings(&evaluator, source);
 
     // 3. The root is a group of the file's top-level statements; resolve them
     //    under the implicit top-level union.
@@ -216,6 +219,18 @@ pub(crate) fn resolve_source(source: &str, source_path: Option<&Path>) -> Resolv
         errors: Vec::new(),
         warnings,
     }
+}
+
+/// The evaluator's warnings as wire strings, each prefixed with where it was
+/// raised: `line:col: msg` for the open buffer (the editor knows which file
+/// that is) and `lib.scad:line:col: msg` for an included or used file — the
+/// file NAME only, never its path. The wire type stays a plain string array.
+fn located_warnings(evaluator: &Evaluator, source: &str) -> Vec<String> {
+    evaluator
+        .eval_warnings()
+        .iter()
+        .map(|warning| warning.located_message(source, None))
+        .collect()
 }
 
 /// Run the full compile pipeline on `source` and return its result. Pure: no
@@ -275,6 +290,45 @@ mod tests {
         let i = u32::from_le_bytes(bytes[4..8].try_into().unwrap());
         assert_eq!(v, 3);
         assert_eq!(i, 3);
+    }
+
+    #[test]
+    fn warnings_are_prefixed_with_their_location() {
+        let result = compile_source("cube(1);\n  sphere(r = rr);\n", None);
+        assert!(result.errors.is_empty(), "{:?}", result.errors);
+        assert_eq!(
+            result.warnings,
+            ["2:14: Ignoring unknown variable 'rr'".to_string()]
+        );
+    }
+
+    #[test]
+    fn warnings_from_included_files_name_the_file_not_its_path() {
+        let dir = std::env::temp_dir().join(format!(
+            "morphe-desktop-warn-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |d| d.as_nanos())
+        ));
+        std::fs::create_dir_all(dir.join("lib")).unwrap();
+        std::fs::write(dir.join("lib/part.scad"), "\ncube(w);\n").unwrap();
+        let main = dir.join("main.scad");
+        let source = "include <lib/part.scad>\ncube(v);\n";
+        let result = compile_source(source, Some(&main));
+        assert!(result.errors.is_empty(), "{:?}", result.errors);
+        assert_eq!(
+            result.warnings,
+            [
+                "part.scad:2:6: Ignoring unknown variable 'w'".to_string(),
+                "2:6: Ignoring unknown variable 'v'".to_string(),
+            ]
+        );
+        assert!(result
+            .warnings
+            .iter()
+            .all(|w| !w.contains(&*dir.to_string_lossy())));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

@@ -321,3 +321,33 @@ fn compile_long_binary_chain_is_a_parse_error() {
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(stderr.contains("nesting too deep"), "{stderr}");
 }
+
+#[test]
+fn compile_warnings_carry_file_line_col() {
+    let dir = tmp_dir("warn-loc");
+    fs::create_dir_all(dir.join("lib")).unwrap();
+    let lib = write_scad(&dir, "lib/part.scad", "cube(1);\n  sphere(r = rr);\n");
+    let input = write_scad(
+        &dir,
+        "main.scad",
+        "include <lib/part.scad>\ncube(  size = s);\n",
+    );
+    let output = dir.join("out.stl");
+
+    let out = run_compile(&input, &output, false);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(out.status.success(), "stderr: {stderr}");
+    // A warning in the main file names it with its line and column.
+    let main_warning = format!(
+        "{}:2:15: warning: Ignoring unknown variable 's'",
+        input.display()
+    );
+    assert!(stderr.contains(&main_warning), "stderr: {stderr}");
+    // One in an included file names that file instead.
+    let lib_warning = format!(
+        "{}:2:14: warning: Ignoring unknown variable 'rr'",
+        lib.canonicalize().unwrap().display()
+    );
+    assert!(stderr.contains(&lib_warning), "stderr: {stderr}");
+    let _ = fs::remove_dir_all(&dir);
+}
