@@ -1,0 +1,47 @@
+{
+  "ExportError": {
+    "Compile": "{\"kind\":\"compile\",\"errors\":[],\"warnings\":[]}",
+    "Not3D": "{\"kind\":\"not_3d\"}",
+    "Io": "{\"kind\":\"io\",\"message\":\"\"}",
+    "Cancelled": "{\"kind\":\"cancelled\"}"
+  },
+  "CompileError": {
+    "Parse": "{\"line\":0,\"col\":0,\"message\":\"\",\"kind\":\"parse\"}",
+    "Unsupported": "{\"line\":0,\"col\":0,\"message\":\"\",\"kind\":\"unsupported\"}",
+    "General": "{\"line\":0,\"col\":0,\"message\":\"\",\"kind\":\"general\"}",
+    "Resolver": "{\"line\":0,\"col\":0,\"message\":\"\",\"kind\":\"resolver\"}"
+  },
+  "FileError": {
+    "Cancelled": "{\"kind\":\"cancelled\"}",
+    "Io": "{\"kind\":\"io\",\"message\":\"\"}"
+  },
+  "AiEvent": {
+    "Text": "{\"kind\":\"text\",\"text\":\"\"}",
+    "ToolCall": "{\"kind\":\"tool_call\",\"id\":\"\",\"name\":\"\",\"input\":null}",
+    "ToolResult": "{\"kind\":\"tool_result\",\"id\":\"\",\"content\":\"\",\"is_error\":false}",
+    "Done": "{\"kind\":\"done\",\"stop_reason\":\"\",\"final_source\":\"\"}"
+  },
+  "Provider": {
+    "Anthropic": "\"anthropic\"",
+    "OpenAiCompatible": "\"open_ai_compatible\""
+  },
+  "ProviderConfigInfo": {
+    "Instance": "{\"provider\":\"open_ai_compatible\",\"base_url\":\"\",\"model\":\"\",\"has_key\":true}"
+  },
+  "ExportStats": {
+    "Instance": "{\"triangle_count\":1,\"vertex_count\":2,\"format\":\"\",\"bytes_written\":3}"
+  },
+  "OpenFileResult": {
+    "Instance": "{\"path\":\"\",\"source\":\"\"}"
+  },
+  "SaveFileResult": {
+    "Instance": "{\"path\":\"\"}"
+  },
+  "DesignEvent": {
+    "Intent": "{\"kind\":\"intent\",\"statement\":\"\"}",
+    "Decision": "{\"kind\":\"decision\",\"path\":\"\",\"old\":\"\",\"new\":\"\"}",
+    "Constraint": "{\"kind\":\"constraint\",\"name\":\"\",\"value\":\"\"}",
+    "PrintSetting": "{\"kind\":\"print_setting\",\"key\":\"\",\"value\":\"\"}",
+    "ConstraintRetired": "{\"kind\":\"constraint_retired\",\"name\":\"\"}"
+  }
+}

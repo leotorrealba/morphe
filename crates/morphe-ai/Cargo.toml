@@ -1,0 +1,63 @@
+[package]
+name = "morphe-ai"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+# serde powers the Messages-API request/response wire types; field names are
+# snake_case to match the Anthropic wire shape exactly.
+serde = { workspace = true }
+# `preserve_order` makes `Value::Object` back onto an IndexMap instead of a
+# BTreeMap, so JSON round-trips (read_graph → mutate → write_graph) preserve
+# insertion order. Without it, the first write_event against the real
+# git-tracked .noos/graph.json rewrites every key alphabetically → noisy diff.
+# Feature unification means the whole workspace opt-in is additive.
+serde_json = { workspace = true, features = ["preserve_order"] }
+# reqwest is the HTTP client for the real Messages-API transport. We disable
+# default features to drop default-tls/native-tls and use rustls instead; the
+# `stream` feature gives `Response::bytes_stream()` for streaming SSE chunks.
+# (reqwest 0.13 renamed the rustls feature from `rustls-tls` to `rustls`.)
+reqwest = { version = "0.13", default-features = false, features = ["rustls", "stream"] }
+# tokio provides the current-thread runtime that `ReqwestTransport` uses to
+# drive the async reqwest streaming call behind the sync `Transport` trait.
+# `net`/`time` drivers come in via feature unification with reqwest's tokio dep.
+tokio = { version = "1", features = ["rt"] }
+# futures-util provides `StreamExt` to consume `bytes_stream()` chunks.
+futures-util = "0.3"
+# thiserror for typed errors on the client and transport.
+thiserror = "2"
+# fs2 for advisory flock(LOCK_EX) on .noos/write.lock around the sidecar+graph
+# critical section in `write_event` / `rehydrate_events`. Same syscall noos
+# itself uses (unix-flock), so morphe writes serialize against each other AND
+# against external `noos scan`/`noos enrich`. Picked over raw `libc::flock` for
+# the RAII-friendly `FileExt::lock_exclusive` API.
+fs2 = "0.4"
+
+# Path-deps to the kernel crates — wired by the tool dispatcher so
+# `compile` / `get_geometry_stats` can drive the parse → eval → resolve
+# pipeline without going through the CLI.
+morphe-eval = { path = "../morphe-eval" }
+morphe-kernel = { path = "../morphe-kernel" }
+morphe-lang = { path = "../morphe-lang" }
+
+# O_NOFOLLOW / O_NONBLOCK for the hardened opens in `.noos/` (noos_fs.rs).
+# Already in the tree via fs2; declared directly because it is used directly.
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+# OS credential-store backends for SecretStore, one per target so each
+# platform compiles only its own backend:
+# - macOS: Keychain via the Security framework (`apple-native`).
+# - Windows: Credential Manager (`windows-native`).
+# - Linux: the freedesktop Secret Service over D-Bus (GNOME Keyring, KWallet,
+#   KeePassXC). `crypto-rust` encrypts the session transfer without OpenSSL,
+#   and `vendored` builds libdbus from source, so neither OpenSSL nor the
+#   libdbus development headers are needed at build time.
+[target.'cfg(target_os = "macos")'.dependencies]
+keyring = { version = "3", default-features = false, features = ["apple-native"] }
+[target.'cfg(target_os = "windows")'.dependencies]
+keyring = { version = "3", default-features = false, features = ["windows-native"] }
+[target.'cfg(target_os = "linux")'.dependencies]
+keyring = { version = "3", default-features = false, features = ["sync-secret-service", "crypto-rust", "vendored"] }

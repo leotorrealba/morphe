@@ -1,0 +1,33 @@
+[package]
+name = "morphe-desktop"
+version = "0.1.0"
+description = "Tauri 2 desktop shell for morphe"
+authors = ["Leonardo Torrealba"]
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[lib]
+name = "morphe_desktop_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+# Native open/save file dialogs scoped to `.scad`, behind the FileDialogPicker
+# seam in `file.rs`.
+tauri-plugin-dialog = "2"
+serde = { workspace = true }
+serde_json = { workspace = true }
+# Path deps to the morphe kernel crates — the desktop backend compiles .scad
+# source through these.
+morphe-eval = { path = "../../../crates/morphe-eval" }
+morphe-kernel = { path = "../../../crates/morphe-kernel" }
+# parse_program + line_col drive the compile_source IPC seam.
+morphe-lang = { path = "../../../crates/morphe-lang" }
+# The agentic-AI client + loop: the ai_* IPC commands wire the agent
+# loop into the desktop backend, streaming AiEvents to the frontend over a
+# Tauri Channel.
+morphe-ai = { path = "../../../crates/morphe-ai" }

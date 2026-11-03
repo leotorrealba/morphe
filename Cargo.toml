@@ -1,0 +1,28 @@
+[workspace]
+resolver = "2"
+members = ["crates/*", "apps/desktop/src-tauri"]
+
+[workspace.dependencies]
+clap = { version = "4", features = ["derive"] }
+# manifold3d is a facade over manifold-csg (elalish/manifold, the CSG engine
+# modern OpenSCAD uses). Its -sys crate git-clones the pinned upstream and
+# cmake-builds it statically (no system libmanifold needed). `parallel` (TBB)
+# is off to keep the C++ build surface minimal.
+manifold3d = { version = "0.3.1", default-features = false }
+# serde powers the serializable geometry-stats struct, consumed as JSON by the
+# AI loop's get_geometry_stats tool and the CLI.
+serde = { version = "1", features = ["derive"] }
+# float_roundtrip: the default fast float parser mis-parses some doubles
+# (38/39*100 round-tripped as ...89745 vs ...89743), which broke the coverage
+# report's JSON round-trip test. Exact round-trip.
+serde_json = { version = "1", features = ["float_roundtrip"] }
+# ttf-parser parses the bundled Fira Sans Regular TTF (SIL OFL 1.1; see
+# crates/morphe-kernel/src/assets/fonts/OFL.txt) for text() glyph outlines.
+# Pure Rust, zero transitive deps. Alternatives considered: ab_glyph (pulls
+# owned_ttf_parser + rusttype lineage), fontdue (no CFF support).
+ttf-parser = "0.25"
+
+[workspace.package]
+edition = "2021"
+rust-version = "1.96"
+license = "GPL-3.0-or-later"

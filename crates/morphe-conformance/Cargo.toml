@@ -1,0 +1,21 @@
+[package]
+name = "morphe-conformance"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[lib]
+name = "morphe_conformance"
+path = "src/lib.rs"
+
+[[bin]]
+name = "morphe-conformance"
+path = "src/main.rs"
+
+[dependencies]
+morphe-lang = { path = "../morphe-lang" }
+morphe-eval = { path = "../morphe-eval" }
+morphe-kernel = { path = "../morphe-kernel" }
+serde = { workspace = true }
+serde_json = { workspace = true }

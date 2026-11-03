@@ -1,0 +1,81 @@
+/*
+ * Ember design tokens for the morphe desktop app.
+ *
+ * A minimal Ember-inspired token set expressed as CSS custom
+ * properties. Dark is the `:root` default (the comfortable theme for CAD
+ * work); `[data-theme="light"]` overrides for a light variant. Components
+ * reference these via `var(--morphe-*)` so the whole UI re-themes by toggling
+ * `data-theme` on the root element (see hooks/useTheme.ts).
+ *
+ * The accent (Ember orange) mirrors the viewport mesh material color so the
+ * chrome and the rendered solid read as one system.
+ */
+
+:root {
+  /* color — dark (default) */
+  --morphe-bg: #1a1a1c;
+  --morphe-surface: #232326;
+  --morphe-surface-2: #2d2d31;
+  --morphe-text: #e8e6e3;
+  --morphe-text-dim: #9a958e;
+  --morphe-accent: #e6a85c;
+  --morphe-accent-press: #c98e44;
+  --morphe-error: #e5707a;
+  --morphe-success: #7ec47e;
+  --morphe-border: #38383d;
+
+  /* spacing scale (px) */
+  --morphe-space-1: 4px;
+  --morphe-space-2: 8px;
+  --morphe-space-3: 12px;
+  --morphe-space-4: 16px;
+  --morphe-space-5: 24px;
+  --morphe-space-6: 32px;
+
+  /* typography */
+  --morphe-font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --morphe-font-mono: "SF Mono", Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  --morphe-font-size: 13px;
+  --morphe-font-size-sm: 11px;
+  --morphe-line-height: 1.5;
+
+  /* radius + shadow */
+  --morphe-radius: 6px;
+  --morphe-radius-sm: 3px;
+  --morphe-shadow: 0 6px 20px rgba(0, 0, 0, 0.4);
+
+  color-scheme: dark;
+}
+
+[data-theme="light"] {
+  --morphe-bg: #f6f5f3;
+  --morphe-surface: #ffffff;
+  --morphe-surface-2: #eceae6;
+  --morphe-text: #26241f;
+  --morphe-text-dim: #6b665f;
+  --morphe-accent: #b97519;
+  --morphe-accent-press: #9c6113;
+  --morphe-error: #c0394a;
+  --morphe-success: #3c8c3c;
+  --morphe-border: #dcd9d4;
+
+  --morphe-shadow: 0 6px 20px rgba(0, 0, 0, 0.12);
+
+  color-scheme: light;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background: var(--morphe-bg);
+  color: var(--morphe-text);
+  font-family: var(--morphe-font);
+  font-size: var(--morphe-font-size);
+  line-height: var(--morphe-line-height);
+  -webkit-font-smoothing: antialiased;
+}
