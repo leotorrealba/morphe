@@ -302,7 +302,14 @@ fn resolve_source(
             .map(|e| CompileError::from_eval_error(e, src))
             .collect());
     }
-    let mut warnings = evaluator.warnings().to_vec();
+    // Each eval warning is prefixed with where it was raised: `line:col: `
+    // in the buffer, `lib.scad:line:col: ` in an included or used file (the
+    // file name only — absolute paths never reach the provider).
+    let mut warnings: Vec<String> = evaluator
+        .eval_warnings()
+        .iter()
+        .map(|warning| warning.located_message(src, None))
+        .collect();
 
     // The root is a group of the file's top-level statements; resolve them
     // under the implicit top-level union.
@@ -954,6 +961,42 @@ mod tests {
             v["ok"], true,
             "import resolves via the dispatcher's source path: {content}"
         );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn compile_warnings_carry_their_location_without_paths() {
+        let dir = std::env::temp_dir().join(format!(
+            "morphe-ai-warn-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |d| d.as_nanos())
+        ));
+        std::fs::create_dir_all(dir.join("lib")).expect("mkdir");
+        std::fs::write(dir.join("lib/part.scad"), "module part() sphere(r = rr);\n")
+            .expect("fixture write");
+        let mut d = Dispatcher::new(Box::new(InMemoryWorkspace::new()), None)
+            .with_source_path(Some(dir.join("main.scad")));
+        let source = "use <lib/part.scad>\npart();\n  cube(s);\n";
+        for tool in ["compile", "get_geometry_stats"] {
+            let result = d.dispatch(tool, &serde_json::json!({ "source": source }));
+            let v: Value = result_json(&result.content);
+            assert_eq!(v["ok"], true, "{tool}: {}", result.content);
+            assert_eq!(
+                v["warnings"],
+                serde_json::json!([
+                    "part.scad:1:26: Ignoring unknown variable 'rr'",
+                    "3:8: Ignoring unknown variable 's'",
+                ]),
+                "{tool}"
+            );
+            assert!(
+                !result.content.contains(&*dir.to_string_lossy()),
+                "no absolute paths in the tool result: {}",
+                result.content
+            );
+        }
         let _ = std::fs::remove_dir_all(&dir);
     }
 

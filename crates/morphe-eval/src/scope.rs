@@ -32,6 +32,8 @@
 
 use std::collections::HashMap;
 
+use morphe_lang::lexer::Span;
+
 use crate::value::Value;
 
 /// Handle to a frame in a [`ScopeStack`] arena (e.g. a definition site
@@ -111,6 +113,12 @@ pub struct ScopeStack {
     frames: Vec<Frame>,
     current: FrameId,
     warnings: Vec<String>,
+    /// Where each entry of `warnings` was raised: the [`ScopeStack::warn_span`]
+    /// in effect at the time (parallel to `warnings`).
+    warning_spans: Vec<Option<Span>>,
+    /// The source span new warnings are attributed to — the evaluator keeps
+    /// it pointing at the innermost expression or statement being evaluated.
+    warn_span: Option<Span>,
 }
 
 impl ScopeStack {
@@ -129,6 +137,8 @@ impl ScopeStack {
             frames: vec![Frame::default()],
             current: Self::ROOT,
             warnings: Vec::new(),
+            warning_spans: Vec::new(),
+            warn_span: None,
         };
         stack.set("PI", Value::Number(std::f64::consts::PI));
         // Fragment resolution + animation time (Builtins.cc 112-119).
@@ -409,9 +419,30 @@ impl ScopeStack {
         &self.warnings
     }
 
-    /// Record an evaluation warning.
+    /// The source span of each warning in [`ScopeStack::warnings`] (same
+    /// order and length): where evaluation was when it was raised, or `None`
+    /// when no span was in effect.
+    pub fn warning_spans(&self) -> &[Option<Span>] {
+        &self.warning_spans
+    }
+
+    /// Set the span new warnings are attributed to, returning the previous
+    /// one so the caller can restore it once it is done with the construct.
+    pub fn set_warn_span(&mut self, span: Option<Span>) -> Option<Span> {
+        std::mem::replace(&mut self.warn_span, span)
+    }
+
+    /// Record an evaluation warning at the current warning span (see
+    /// [`ScopeStack::set_warn_span`]).
     pub fn warn(&mut self, message: impl Into<String>) {
         self.warnings.push(message.into());
+        self.warning_spans.push(self.warn_span);
+    }
+
+    /// Record an evaluation warning at an explicit span.
+    pub fn warn_at(&mut self, span: Span, message: impl Into<String>) {
+        self.warnings.push(message.into());
+        self.warning_spans.push(Some(span));
     }
 }
 
