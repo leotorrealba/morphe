@@ -672,3 +672,51 @@ fn symlink_in_an_included_file_cannot_escape_the_source_tree() {
     let (_, ev) = run_file(&main);
     assert!(single_error(&ev).message.contains("resolves outside"));
 }
+
+// --------------------------------------------------- warnings in loaded files
+
+#[test]
+fn warnings_in_included_files_report_that_file_and_line() {
+    let dir = temp_dir("warn-include");
+    let lib = write(&dir, "lib.scad", "a = 1;\n\n  cube(missing);\n");
+    let main = write(&dir, "main.scad", "cube(1);\ninclude <lib.scad>\n");
+    let (_, ev) = run_file(&main);
+    let warnings = ev.eval_warnings();
+    assert_eq!(warnings.len(), 1, "{warnings:?}");
+    let warning = &warnings[0];
+    let origin = warning
+        .origin
+        .as_ref()
+        .expect("located in the included file");
+    assert_eq!(origin.file, lib.canonicalize().unwrap());
+    assert_eq!((origin.line, origin.col), (3, 8));
+    // The main-source span is the `include` line.
+    let src = std::fs::read_to_string(&main).unwrap();
+    assert_eq!(line_col(&src, warning.span.unwrap().start), (2, 1));
+    assert_eq!(
+        warning.located_message(&src, Some("main.scad")),
+        "lib.scad:3:8: Ignoring unknown variable 'missing'"
+    );
+}
+
+#[test]
+fn warnings_in_used_modules_report_the_library_location() {
+    let dir = temp_dir("warn-use");
+    write(
+        &dir,
+        "lib.scad",
+        "module part() {\n    sphere(r = radius);\n}\n",
+    );
+    let main = write(&dir, "main.scad", "use <lib.scad>\n\npart();\n");
+    let (_, ev) = run_file(&main);
+    let src = std::fs::read_to_string(&main).unwrap();
+    let located: Vec<String> = ev
+        .eval_warnings()
+        .iter()
+        .map(|w| w.located_message(&src, None))
+        .collect();
+    assert_eq!(
+        located,
+        ["lib.scad:2:16: Ignoring unknown variable 'radius'"]
+    );
+}

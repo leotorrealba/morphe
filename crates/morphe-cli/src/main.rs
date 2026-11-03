@@ -96,7 +96,8 @@ fn main() -> ExitCode {
 /// [`resolve_root`]. On success returns the resolved geometry (`None` = an empty
 /// result). Parse errors, hard eval errors, and resolver errors are reported to
 /// stderr with `file:line:col` (parse/eval) or `file: error:` (resolver) framing
-/// and yield `Err(())`; eval and resolver warnings are printed but do not fail.
+/// and yield `Err(())`; eval warnings (`file:line:col: warning:`) and resolver
+/// warnings (`file: warning:`) are printed but do not fail.
 /// Both `compile` and `stats` drive this so the diagnostics stay identical.
 ///
 /// The whole front end (including the AST/CSG-tree drops) runs on the
@@ -151,8 +152,17 @@ fn evaluate_scad_inner(input: &Path) -> Result<Option<Geometry>, ()> {
         }
         return Err(());
     }
-    for warning in evaluator.warnings() {
-        eprintln!("{display}: warning: {warning}");
+    // Warnings are framed like errors: `file:line:col: warning: …`, at the
+    // included/used file's position when they come from one.
+    for warning in evaluator.eval_warnings() {
+        let file = warning
+            .origin
+            .as_ref()
+            .map_or_else(|| display.to_string(), |o| o.file.display().to_string());
+        match warning.line_col(&src) {
+            Some((line, col)) => eprintln!("{file}:{line}:{col}: warning: {}", warning.message),
+            None => eprintln!("{file}: warning: {}", warning.message),
+        }
     }
 
     // The root is a group of the file's top-level statements; resolve them under

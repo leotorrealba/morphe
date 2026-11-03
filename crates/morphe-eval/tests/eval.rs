@@ -704,3 +704,89 @@ fn expression_nesting_too_deep_body() {
     let expr = parse_expr("1 + 1").expect("parse");
     assert_eq!(evaluator.eval_expr(&expr), n(2.0));
 }
+
+// ------------------------------------------------------- warning locations
+
+/// `(line, col, message)` of every warning, located in `src`.
+fn located_warnings(src: &str) -> Vec<(usize, usize, String)> {
+    let evaluator = eval_program(src);
+    let warnings = evaluator.eval_warnings();
+    // The structured list mirrors the plain one.
+    assert_eq!(
+        warnings
+            .iter()
+            .map(|w| w.message.as_str())
+            .collect::<Vec<_>>(),
+        evaluator.warnings()
+    );
+    warnings
+        .iter()
+        .map(|w| {
+            assert!(w.origin.is_none(), "main-buffer warning: {w:?}");
+            let (line, col) = w.line_col(src).expect("located");
+            (line, col, w.message.clone())
+        })
+        .collect()
+}
+
+#[test]
+fn warnings_point_at_the_innermost_expression() {
+    let src = "x = 1;\ncube(  size = y);\n";
+    assert_eq!(
+        located_warnings(src),
+        [(2, 15, "Ignoring unknown variable 'y'".to_string())]
+    );
+}
+
+#[test]
+fn warnings_raised_by_a_statement_point_at_it() {
+    let src = "cube(1);\n  frobnicate();\n";
+    let warnings = located_warnings(src);
+    assert_eq!(warnings.len(), 1, "{warnings:?}");
+    assert_eq!((warnings[0].0, warnings[0].1), (2, 3));
+    assert!(warnings[0].2.contains("frobnicate"), "{warnings:?}");
+}
+
+#[test]
+fn repeated_assignment_warning_points_at_the_repeat() {
+    let src = "a = 1;\nb = 2;\na = 3;\n";
+    assert_eq!(
+        located_warnings(src),
+        [(3, 1, "variable a was assigned twice".to_string())]
+    );
+}
+
+#[test]
+fn warnings_in_function_bodies_point_into_the_body() {
+    let src = "function f() = 1 + q;\n\nv = f();\n";
+    assert_eq!(
+        located_warnings(src),
+        [
+            (1, 20, "Ignoring unknown variable 'q'".to_string()),
+            (
+                1,
+                16,
+                "undefined operation (number + undefined)".to_string()
+            ),
+        ]
+    );
+}
+
+#[test]
+fn located_message_formats() {
+    let src = "\n  cube(w);\n";
+    let evaluator = eval_program(src);
+    let warning = &evaluator.eval_warnings()[0];
+    assert_eq!(
+        warning.located_message(src, None),
+        "2:8: Ignoring unknown variable 'w'"
+    );
+    assert_eq!(
+        warning.located_message(src, Some("main.scad")),
+        "main.scad:2:8: Ignoring unknown variable 'w'"
+    );
+    assert_eq!(
+        warning.location(src, Some("main.scad")).as_deref(),
+        Some("main.scad:2:8")
+    );
+}
