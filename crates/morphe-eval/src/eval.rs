@@ -133,7 +133,10 @@
 //!   reach the using scope. Each loaded file is parsed at its own span base
 //!   ([`crate::include`]), so errors inside it carry its location in
 //!   [`EvalError::origin`]. Targets must lie under the source directory or
-//!   a library directory (see [`Evaluator::set_library_paths`]).
+//!   a library directory (see [`Evaluator::set_library_paths`]). The same
+//!   span map tells `import()`/`surface()` which file a call is written in,
+//!   so their relative paths resolve next to that file, as upstream's
+//!   `lookup_file` does with the instantiation's location.
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -3196,6 +3199,10 @@ impl Evaluator {
     /// requires a regular file (morphe-kernel's `read_capped`), so a device
     /// node or FIFO is refused even on the unknown-source-dir path.
     ///
+    /// A call written inside an included or used file resolves against
+    /// THAT file's directory instead (see
+    /// [`Self::resolve_load_path_in_loaded_file`]).
+    ///
     /// The check is path-based at eval time and the kernel re-opens by path
     /// later; a local attacker racing the filesystem between the two is out
     /// of scope (the threat is untrusted `.scad` text, not a hostile host).
@@ -3206,6 +3213,10 @@ impl Evaluator {
         let raw = PathBuf::from(file);
         if self.reject_parent_dir(&raw, op, span) {
             return None;
+        }
+        if let Some(loaded) = self.source_map.locate(span) {
+            let file_dir = loaded.path.parent().map(Path::to_path_buf);
+            return self.resolve_load_path_in_loaded_file(raw, file_dir, op, span);
         }
         let Some(dir) = self.source_dir.clone() else {
             return Some(raw);
@@ -3246,11 +3257,82 @@ impl Evaluator {
         allowed
     }
 
+    /// [`Self::resolve_load_path`] for an `import()`/`surface()` call written
+    /// inside an included or used file whose (canonical) directory is
+    /// `file_dir`.
+    ///
+    /// Upstream resolves the file relative to the file the statement is
+    /// written in: `do_import` (`src/core/ImportNode.cc`) and
+    /// `builtin_surface` (`src/core/SurfaceNode.cc`) call
+    /// `lookup_file(file, inst->location().filePath().parent_path())`
+    /// (`src/io/fileutils.cc`), where the location is the
+    /// `ModuleInstantiation`'s own source position — so a module defined in
+    /// a library loads data next to the library even when it is
+    /// instantiated from the main file.
+    ///
+    /// Containment matches `include`/`use`: the target must lie under the
+    /// main file's directory or a library directory, checked on the
+    /// canonical path when the file exists (so a symlink cannot escape) and
+    /// lexically when it does not. A library file may therefore load data
+    /// stored next to it inside its library directory.
+    fn resolve_load_path_in_loaded_file(
+        &mut self,
+        raw: PathBuf,
+        file_dir: Option<PathBuf>,
+        op: &str,
+        span: Span,
+    ) -> Option<PathBuf> {
+        let mut given_roots: Vec<PathBuf> = Vec::new();
+        if let Some(dir) = &self.source_dir {
+            given_roots.push(if dir.as_os_str().is_empty() {
+                PathBuf::from(".")
+            } else {
+                dir.clone()
+            });
+        }
+        given_roots.extend(self.library_paths.iter().cloned());
+        let canonical_roots: Vec<PathBuf> = given_roots
+            .iter()
+            .filter_map(|root| root.canonicalize().ok())
+            .collect();
+
+        let joined = match &file_dir {
+            Some(dir) if !raw.is_absolute() => dir.join(&raw),
+            _ => raw.clone(),
+        };
+        let allowed = match joined.canonicalize() {
+            Ok(canonical) => canonical_roots
+                .iter()
+                .any(|root| canonical.starts_with(root))
+                .then_some(canonical),
+            Err(_) => {
+                let lexical = normalize_lexically(&joined);
+                given_roots
+                    .iter()
+                    .map(|root| normalize_lexically(root))
+                    .chain(canonical_roots.iter().cloned())
+                    .any(|root| lexical.starts_with(&root))
+                    .then_some(joined)
+            }
+        };
+        if allowed.is_none() {
+            self.errors.push(EvalError::general(
+                format!(
+                    "{op}(): `{}` resolves outside the source file's directory and OPENSCADPATH — only files under them can be loaded",
+                    raw.display()
+                ),
+                span,
+            ));
+        }
+        allowed
+    }
+
     /// `import(file=…, layer=…, convexity=…)` argument
     /// resolution (upstream `import.cc builtin_import`/`ImportNode`):
     /// `file` is required (missing → a structured `General` error at the
-    /// call span); relative paths resolve against the `source_dir`
-    /// context AT EVAL TIME (the absolute PathBuf rides in the node so the
+    /// call span); relative paths resolve AT EVAL TIME against the
+    /// directory of the file the call is written in — `source_dir` for the
+    /// main file (the absolute PathBuf rides in the node so the
     /// kernel resolve seam is a pure file-open); absolute paths are
     /// untouched. `layer` is a 3MF/DXF-only parameter (upstream .dxf layer
     /// lookup) — on an .stl import it warns + ignores, matching upstream's
@@ -3296,8 +3378,9 @@ impl Evaluator {
     /// `surface(file=…, center=…, invert=…, convexity=…)` argument
     /// resolution (upstream `surface.cc`/`SurfaceNode`): `file` is required
     /// (missing → a structured `General` error at the call span); relative
-    /// paths resolve against the `source_dir` AT EVAL TIME (identical to
-    /// `import_params`, so the kernel resolve is a pure file-open); absolute
+    /// paths resolve AT EVAL TIME against the directory of the file the call
+    /// is written in (identical to `import_params`, so the kernel resolve is
+    /// a pure file-open); absolute
     /// paths untouched. `center`/`invert` default false and are set ONLY by a
     /// Bool argument (upstream gates on `Value::Type::BOOL` — a numeric
     /// `center` is ignored, not `toBool`'d). `convexity` defaults 1.
