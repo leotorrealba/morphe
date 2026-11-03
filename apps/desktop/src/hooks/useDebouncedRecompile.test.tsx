@@ -155,3 +155,97 @@ test("cancelled_flag_drops_stale_result_when_edit_supersedes_inflight_compile", 
   expect(result.current.stats?.triangle_count).toBe(2);
   expect(result.current.mesh?.triangleCount).toBe(2);
 });
+
+// ── a failed compile keeps the last good model ──────────────────────────────
+
+const GOOD: CompileResult = {
+  mesh: {
+    positions: new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0]),
+    indices: new Uint32Array([0, 1, 2]),
+    vertexCount: 3,
+    triangleCount: 1,
+  },
+  meta: {
+    stats: {
+      bbox: null,
+      bbox_size: null,
+      volume: 0,
+      surface_area: 0,
+      is_manifold: true,
+      triangle_count: 1,
+      vertex_count: 3,
+    },
+    errors: [],
+    warnings: [],
+    mesh_len: 0,
+  },
+};
+
+const BROKEN: CompileResult = {
+  mesh: { positions: new Float32Array(0), indices: new Uint32Array(0), vertexCount: 0, triangleCount: 0 },
+  meta: {
+    stats: null,
+    errors: [{ line: 1, col: 5, message: "expected ';'", kind: "parse" }],
+    warnings: [],
+    mesh_len: 0,
+  },
+};
+
+async function compileWith(
+  rerender: (p: { src: string }) => void,
+  src: string,
+  outcome: CompileResult | Error,
+) {
+  if (outcome instanceof Error) {
+    vi.mocked(compileSource).mockRejectedValueOnce(outcome);
+  } else {
+    vi.mocked(compileSource).mockResolvedValueOnce(outcome);
+  }
+  act(() => rerender({ src }));
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(250);
+  });
+}
+
+test("a_failed_compile_keeps_the_last_good_mesh_and_marks_it_stale", async () => {
+  vi.mocked(compileSource).mockResolvedValueOnce(GOOD);
+  const { rerender, result } = renderHook(({ src }) => useDebouncedRecompile(src, 250), {
+    initialProps: { src: "cube(1);" },
+  });
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(250);
+  });
+  expect(result.current.mesh?.triangleCount).toBe(1);
+  expect(result.current.stale).toBe(false);
+
+  // A typo: errors are reported, but the viewport keeps the previous model.
+  await compileWith(rerender, "cube(1)", BROKEN);
+  expect(result.current.errors).toHaveLength(1);
+  expect(result.current.mesh?.triangleCount).toBe(1);
+  expect(result.current.stats?.triangle_count).toBe(1);
+  expect(result.current.stale).toBe(true);
+
+  // The IPC call itself failing behaves the same way.
+  await compileWith(rerender, "cube(1)  ", new Error("worker crashed"));
+  expect(result.current.errors[0].message).toBe("worker crashed");
+  expect(result.current.mesh?.triangleCount).toBe(1);
+  expect(result.current.stale).toBe(true);
+
+  // Fixing the typo replaces the model and clears the stale flag.
+  await compileWith(rerender, "cube(2);", GOOD);
+  expect(result.current.errors).toHaveLength(0);
+  expect(result.current.stale).toBe(false);
+});
+
+test("a_failed_first_compile_has_no_model_and_is_not_stale", async () => {
+  vi.mocked(compileSource).mockResolvedValueOnce(BROKEN);
+  const { result } = renderHook(({ src }) => useDebouncedRecompile(src, 250), {
+    initialProps: { src: "cube(" },
+  });
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(250);
+  });
+  expect(result.current.errors).toHaveLength(1);
+  expect(result.current.mesh).toBeNull();
+  expect(result.current.stale).toBe(false);
+});

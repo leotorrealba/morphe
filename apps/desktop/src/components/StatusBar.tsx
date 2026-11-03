@@ -9,9 +9,11 @@ export interface StatusBarProps {
   compiling: boolean;
   lastMs: number | null;
   errorCount: number;
+  /** The viewport shows the last good model because the latest compile failed. */
+  stale?: boolean;
 }
 
-export default function StatusBar({ stats, compiling, lastMs, errorCount }: StatusBarProps) {
+export default function StatusBar({ stats, compiling, lastMs, errorCount, stale = false }: StatusBarProps) {
   return (
     <footer
       data-testid="status-bar"
@@ -40,6 +42,11 @@ export default function StatusBar({ stats, compiling, lastMs, errorCount }: Stat
       )}
       {errorCount > 0 && (
         <span style={{ color: "var(--morphe-error)" }}>{errorCount} error{errorCount > 1 ? "s" : ""}</span>
+      )}
+      {stale && (
+        <span data-testid="status-stale" title="The latest edit has errors; the viewport shows the last model that compiled">
+          showing last good model
+        </span>
       )}
     </footer>
   );
