@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="docs/assets/logo.png" alt="morphe — from .scad source to printable geometry. Powered by Rust. Built for makers." width="420">
+</p>
+
 # morphe
 
 > **μορφή** — "form". An OpenSCAD-compatible parametric CAD app with a built-in AI agent.
