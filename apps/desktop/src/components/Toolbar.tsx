@@ -9,6 +9,7 @@
 // opened filename is shown next to the brand mark as a minimal "what's loaded"
 // affordance — no full file-management UX (recent files, save-back, etc.).
 import type { Theme } from "../hooks/useTheme";
+import morpheMark from "../assets/morphe-mark.png";
 
 export interface ToolbarProps {
   onExport: () => void;
@@ -51,6 +52,15 @@ export default function Toolbar({
         flexShrink: 0,
       }}
     >
+      <img
+        src={morpheMark}
+        alt=""
+        aria-hidden="true"
+        data-testid="toolbar-mark"
+        width={24}
+        height={24}
+        style={{ display: "block" }}
+      />
       <span style={{ fontWeight: 600, color: "var(--morphe-accent)", letterSpacing: "0.04em" }}>
         morphe
       </span>
